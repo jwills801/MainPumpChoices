@@ -1,0 +1,1 @@
+This code uses dynamic programming to minimize the size of accumulators on the HHEA. This code takes in the rail flows which resulted from a lagrange multiplier optimization on the pressure rail selection.

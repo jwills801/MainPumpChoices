@@ -1,0 +1,175 @@
+%% Dynamic Programming THIS IS JAKE's algorithm
+% Fill / empty the rails so that the accumulators sizes are minimized.
+
+% This version has adjusted the Cost2Switch to hopefully do its job better,
+% although the success of this feature has not been tested and is hard to
+% see in regular drive cycles. A Drive cycle could be cooked up to test
+% whether switches are correctly penalyzed.
+
+% This code takes a drive cycle, and modifies it so that it has two rails
+% that need main pump flow
+
+clear, close all
+% Load Drive Cycle
+load('JCB5T_C0P_3CPR_Flows.mat')
+% figure(1), plot(t,cumsum(QR_1),t,cumsum(QR_2),t,cumsum(QR_3))
+% legend('Rail 1','Rail 2','Rail 3'), ylabel('Cummulative Flow (m^3)'), xlabel('Time (s)')
+
+% Posative flow is flow leaving the accumulator
+
+% We are pumping to rail 3 and inverting rail 1 and pumping to it
+V1 = cumsum(QR_3);
+V2 = cumsum(QR_1);
+V = [V1 V2];
+% figure(1), plot(t,V1,t,V2)
+% legend('Rail 1','Rail 2'), ylabel('Cummulative Flow (m^3)'), xlabel('Time (s)')
+
+
+% Start at t(end)
+dt = t(2)-t(1);
+dtscale = 100; % Step through DP at a different time step than the one given by Drive Cycle
+DPdt = dtscale*dt;
+DPt = 0:DPdt:t(end);
+
+% Set flow rate and cost to switch
+Qave = max(abs(V(end,:)/t(end)));
+N = 50;
+Qvals = linspace(Qave,20*Qave,N);
+Cost2Switch = 0*1e-2;
+
+PercentDone = 0
+for iii = 1:N
+    
+    
+% nn is the number of time steps with flow it takes to get the the required
+% volume
+nn = max(ceil(V1(end)/Qvals(iii)/DPdt) +2,ceil(V2(end)/-Qvals(iii)/DPdt) +2);
+
+
+% Make V_MP - which is a matrix of possible values of V_p at each time
+for i = 0:nn-1
+V_MP1(i+1) = i*Qvals(iii)*DPdt;
+end
+V_MP = [(V_MP1) (-V_MP1)];
+
+
+% Build the cost
+J = NaN(nn^size(V,2),length(DPt));
+ind = J;
+
+% Make indexers
+a = fliplr(cumsum(ones(1,length(V_MP1)))); b = 2*a(1):-1:a(1)+1; c = 3*a(1):-1:2*a(1)+1;
+if size(V,2) == 3 
+    [x,y,z] = meshgrid(a,b,c); X = x(:); Y = y(:); Z = z(:);
+    J(:,end) = abs(V(end,1)-V_MP(X)) + abs(V(end,2)-V_MP(Y)) + abs(V(end,end)-V_MP(Z)) ;
+    disp('Size of V not accounted for in this code')
+    return
+elseif size(V,2) == 2
+    [x,y] = meshgrid(a,b); X = x(:); Y = y(:);
+    J(:,end) = abs(V(end,1)-V_MP(X)) + abs(V(end,2)-V_MP(Y));
+elseif size(V,2) ==1
+    J(:,end) = abs(V(end,1)-V_MP);
+else
+    disp('Size of V not accounted for in this code')
+    return
+end
+%
+
+
+
+%
+%PercentDone = 0
+for k = 1:length(DPt)-1
+    [~,t_ind] = min(abs(t-(t(end)-k*DPdt)));
+    J(1,end-k) = abs(V1(t_ind)-V_MP(1))+ abs(V1(t_ind)-V_MP(1)) + J(1,end-k+1);
+    ind(1,end-k) = 4;
+    for j = 2:nn^size(V,2)
+        if V_MP(X(j)) == max(V_MP) % The case where rail 1 should not be filled anymore
+            [J(j,end-k),ind(j,end-k)] = min([J(j-1,end-k+1)+Cost2Switch*(ind(j,end-k+1)==2|ind(j,end-k+1)==3|ind(j,end-k+1)==4),inf,inf,J(j,end-k+1)+Cost2Switch*(ind(j,end-k+1)==1|ind(j,end-k+1)==2|ind(j,end-k+1)==3)]);
+            J(j,end-k) = J(j,end-k) + abs(V(t_ind,1)-V_MP(X(j))) + abs(V(t_ind,2)-V_MP(Y(j)));
+            
+        elseif V_MP(Y(j)) == min (V_MP) % The case where rail 2 should not be emptied anymore
+            [J(j,end-k),ind(j,end-k)] = min([inf,inf,J(j-length(V_MP1),end-k+1)+Cost2Switch*(ind(j-length(V_MP1),end-k+1)==1|ind(j-length(V_MP1),end-k+1)==2|ind(j-length(V_MP1),end-k+1)==4),J(j,end-k+1)+Cost2Switch*(ind(j,end-k+1)==1|ind(j,end-k+1)==2|ind(j,end-k+1)==3)]);
+            J(j,end-k) = J(j,end-k) + abs(V(t_ind,1)-V_MP(X(j))) + abs(V(t_ind,2)-V_MP(Y(j)));            
+            
+        else
+            [J(j,end-k),ind(j,end-k)] = min([J(j-1,end-k+1)+Cost2Switch*(ind(j,end-k+1)==2|ind(j,end-k+1)==3|ind(j,end-k+1)==4),J(j-1-length(V_MP1),end-k+1)+Cost2Switch*(ind(j-1-length(V_MP1),end-k+1)==1|ind(j-1- length(V_MP1),end-k+1)==3|ind(j-1- length(V_MP1),end-k+1)==4),J(j-length(V_MP1),end-k+1)+Cost2Switch*(ind(j-length(V_MP1),end-k+1)==1|ind(j-length(V_MP1),end-k+1)==2|ind(j-length(V_MP1),end-k+1)==4),J(j,end-k+1)+Cost2Switch*(ind(j,end-k+1)==1|ind(j,end-k+1)==2|ind(j,end-k+1)==3)]);
+            J(j,end-k) = J(j,end-k) + abs(V(t_ind,1)-V_MP(X(j))) + abs(V(t_ind,2)-V_MP(Y(j))); 
+            
+        end
+
+    end
+    
+    
+    
+
+end
+
+
+
+
+% Get optimal solution back out
+% We have to start at zero flow
+MinCost= min(J(end,1));
+
+current_ind(1) = size(J,1);
+for ii = 1:length(DPt)-1
+    if ind(current_ind(ii),ii) == 1
+        current_ind(ii+1) = current_ind(ii)-1;
+    elseif ind(current_ind(ii),ii) == 2
+        current_ind(ii+1) = current_ind(ii) - 1 - length(V_MP1);
+    elseif ind(current_ind(ii),ii) == 3
+        current_ind(ii+1) = current_ind(ii) - length(V_MP1);
+    elseif ind(current_ind(ii),ii) == 4
+        current_ind(ii+1) = current_ind(ii);
+    end
+end
+
+% Find what the volume looks like at each time
+V_p1 = 0;
+V_p2 = 0;
+for jj = 1:length(DPt)-1
+    V_p1(jj+1) = V_p1(jj) + (ind(current_ind(jj),jj)==2|ind(current_ind(jj),jj)==3)*Qvals(iii)*DPdt;
+    V_p2(jj+1) = V_p2(jj) - (ind(current_ind(jj),jj)==1|ind(current_ind(jj),jj)==2)*Qvals(iii)*DPdt;
+end
+
+
+
+% Does the cost match?
+CostCheck = abs(V(1,1)-V_p1(1)) + abs(V(1,2)-V_p2(1));
+for kk  = 2:length(DPt)
+    [~,t_ind] = min(abs( DPt(kk) - t ));
+    CostCheck = CostCheck +  abs(V(t_ind,1)-V_p1(kk)) + abs(V(t_ind,2)-V_p2(kk));
+    CostCheck = CostCheck + (ind(current_ind(kk-1),kk-1)~=ind(current_ind(kk-1),kk-1))*Cost2Switch;
+end
+[MinCost,CostCheck]; %Those two numbers should be the same
+
+% What is the required accumulator size?
+for i = 1:length(t)
+    [~,DPt_ind] = min(abs( DPt - t(i) ));
+    Error1(i) = abs( V(i,1) - V_p1(DPt_ind));
+    Error2(i) = abs( V(i,2) - V_p2(DPt_ind));
+end
+Accumulator_size1 = max(Error1); % m^3
+Accumulator_size2 = max(Error2); % m^3
+Accumulator_sizes(iii,:) = [Accumulator_size1 Accumulator_size2];
+Accumulatorsizenorm(iii) = norm([Accumulator_size1 Accumulator_size2],2);
+
+
+    PercentDone = 100*iii/length(DPt);
+    if rem(PercentDone,10) < 100/length(DPt)
+        PercentDone = (round(PercentDone,-1))
+    end
+    clear J ind V_MP1 V_MP
+end
+PercentDone = 100
+
+[~,winning_ind] = min(Accumulatorsizenorm);
+BestFlowRate = Qvals(winning_ind)
+AccumulatorSizes = Accumulator_sizes(winning_ind,:)
+
+figure(), plot(Qvals/Qave,MinCost), ylabel('Minimum Accumulator Size (m^3)'),
+xlabel('Flow Rate (multiples of average flow rate)'), title(['Minimum accumulator sizes are [',num2str(Accumulatorsizenorm),'] m^3'])
+grid
+
+
