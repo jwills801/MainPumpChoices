@@ -26,8 +26,8 @@ DPt = 0:DPdt:t(end);
 V1 = cumsum(QR_3)*dt;
 V2 = cumsum(QR_1)*dt;
 V = [V1 V2];
-figure, plot(t,V1,t,V2)
-legend('Rail 1','Rail 2'), ylabel('Volume (m^3)'), xlabel('Time (s)')
+figure, plot(t,V1*1e3,t,V2*1e3)
+legend('Rail 1','Rail 2'), ylabel('Volume (L)'), xlabel('Time (s)')
 
 % Set flow rate and cost to switch
 Qave = max(abs(V(end,:)/t(end)));
@@ -176,8 +176,8 @@ for i = 1:length(t)
     DelV1(i) =  V_p1(DPt_ind) - V(i,1);
     DelV2(i)=  V_p2(DPt_ind) - V(i,2);
 end
-figure, plot(t,DelV1), ylabel('$\Delta V (m^3)$','interpreter','latex'), xlabel('Time (s)','interpreter','latex')
-figure, plot(t,DelV2), ylabel('$\Delta V (m^3)$','interpreter','latex'), xlabel('Time (s)','interpreter','latex')
+%figure, plot(t,DelV1), ylabel('$\Delta V (m^3)$','interpreter','latex'), xlabel('Time (s)','interpreter','latex')
+%figure, plot(t,DelV2), ylabel('$\Delta V (m^3)$','interpreter','latex'), xlabel('Time (s)','interpreter','latex')
 
 
 delV_max1 = max(DelV1) ; [delV_max1, V1_max(end,1)]
@@ -190,15 +190,27 @@ Accumulator_size2_actual = get_accum_size(delV_min2,delV_max2,perc_threshold,K);
 Total_Accum = Accumulator_size1_actual + Accumulator_size2_actual
 
 figure
-plot(t,V,DPt,V_p1,DPt,V_p2), legend('Rail 1 Flow','Rail 2 Flow','Flow delivered to Rail 1 by Pump','Flow delivered to Rail 2 by Pump','Location','NorthWest')
-title(['Accumulator Sizes = [',num2str(Accumulator_size1_actual*1000),' , ',num2str(Accumulator_size2_actual*1000) , ']',' Liters'])
-ylabel('Volume (m^3)'), xlabel('Time (s)')
+plot(t,V*1e3,DPt,V_p1*1e3,DPt,V_p2*1e3), legend('Rail 1 Flow','Rail 2 Flow','Flow delivered to Rail 1 by Pump','Flow delivered to Rail 2 by Pump','Location','NorthWest')
+%title(['Accumulator Sizes = [',num2str(Accumulator_size1_actual*1000),' , ',num2str(Accumulator_size2_actual*1000) , ']',' Liters'])
+ylabel('Volume (L)'), xlabel('Time (s)')
 
 %% Plot Fluid volume in each accum
 Vf1 = DelV1 - delV_min1;
 Vf2 = DelV2 - delV_min2;
 
-figure, plot(t,Vf1,t,Vf2), legend('1','2')
+figure, plot(t,Vf1*1e3,t,Vf2*1e3), xlabel('Time (s)'), ylabel('Volume (L)')
+
+%% plot Pressure in each accum
+P1_over_Prail = ( (Accumulator_size1_actual+delV_min1) ./ (Accumulator_size1_actual - Vf1) ).^K;
+P2_over_Prail = ( (Accumulator_size2_actual+delV_min2) ./ (Accumulator_size2_actual - Vf2) ).^K;
+
+figure, plot(t,P1_over_Prail-1,t,P2_over_Prail-1), xlabel('Time (s)'), ylabel('$\frac{|P(t) - P_{rail}|}{P_{rail}}$','interpreter','latex','FontSize',22.5), hold on
+plot([0, t(end)],[perc_threshold, perc_threshold],'k--',[0, t(end)],[-perc_threshold, -perc_threshold],'--k'), ylim(1.25*[-perc_threshold perc_threshold]), hold off
+
+ylh = get(gca,'ylabel');
+gyl = get(ylh);                                                         % Object Information
+ylp = get(ylh, 'Position');
+set(ylh, 'Rotation',0, 'Position',ylp, 'VerticalAlignment','middle', 'HorizontalAlignment','center')
 
 
 %% Make table for changing perc_threshold

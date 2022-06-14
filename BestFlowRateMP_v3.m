@@ -210,8 +210,8 @@ load Accum_size_norm_200.mat
 load Accum_size_norm_300.mat
 
 
-figure, plot(Qvals,Accumulatorsizenorm_100,Qvals,Accumulatorsizenorm_200,Qvals,Accumulatorsizenorm_300)
-ylabel('\textbf{Sum of accumulator sizes ($m^3$)}','interpreter','latex'), xlabel('\textbf{Flow Rate ($m^3/s$)}','interpreter','latex')
+figure, plot(Qvals*60e3,Accumulatorsizenorm_100*1e3,Qvals*60e3,Accumulatorsizenorm_200*1e3,Qvals*60e3,Accumulatorsizenorm_300*1e3)
+ylabel('\textbf{Sum of accumulator sizes (L)}','interpreter','latex'), xlabel('\textbf{Flow Rate (LPM)}','interpreter','latex')
 legend('Ts = 100 ms','Ts = 200 ms','Ts = 300 ms'), grid
 
 
