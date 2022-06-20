@@ -36,7 +36,7 @@ ss_top = max(V,[],1); % Top of state space
 ss_bottom = min(V,[],1); % Bottom of state space
 nn = ceil( (ss_top-ss_bottom)/Q/DPdt ) + 4 ; % 1x2 vector
 
-% Make V_MP - which is a matrix of possible values of V_p at each time
+% Make V_options - which is a matrix of possible values of V_p at each time
 for i = 1:size(V,2)
     V_options{i} = [0 cumsum(Q*DPdt*ones(1,nn(i)-1)) ] + ss_bottom(i) - 2*Q*DPdt; % I wanted to give a little extra space on the top
     % and bottom of the state space above and below the min and max of the flow
@@ -75,14 +75,14 @@ end
 % Start at t(end)
 for k = 1%:length(DPt)-1
     [~,t_ind] = min(abs(t-(t(end)-k*DPdt))); % The time indice for the fine time mesh
-
-    % evaluate all cases where Tank is the inlet of the pump (There are size(V,2)+1 cases in this category)
-        % Evaluate Tank on the outlet as well
-        J(tern)
-
-
-
+    for iii = 1:prod(nn) % Each option in the state space
+        for ii = 1:(size(V,2)+1)^2-size(V,2) % Loop though all the possible decisions at this state and time
+            u(ii) = calculate_cost(J,t_ind,dtscale,V_min,V_max,V_options,indexer,V,Q,DPdt,iii,ii,k,dt,chi,K) ;
+        end
+        u
+    end
 end
+u
 
 
 return
@@ -238,7 +238,7 @@ for i = 1:length(a)
 end
 [a b Accumulator_Size'*1000]
 
-
+%% Functions!
 
 
 
@@ -253,4 +253,50 @@ function Vt = get_accum_size(Vmin,Vmax,chi,k)
 
     % Total required accumulator volume:
     Vt = max([Vt_1 Vt_2]);
+end
+
+
+
+function J = calculate_cost(J,t_ind,dtscale,V_min,V_max,V_options,indexer,V,Q,DPdt,iii,ii,k,dt,chi,K)
+% ii could be the number which says which rails are pumping and which are motoring
+[M,P] = valve_orientation(size(V,2),ii) ;
+next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,size(V,2),iii) ;
+for j = 1:dtscale % integrate over the finer time mesh
+    for i = 1:size(V,2)
+        V_min_temp{i} = min([V_min{i}(iii,end-k+1) , (V_options{i}(indexer{i}(iii))-V(t_ind+j,i) - Q*dt*(j-1)*(i==M) + Q*dt*(j-1)*(i==P) ) ] ) ;
+        V_max_temp{i} = max([V_max{i}(iii,end-k+1) , (V_options{i}(indexer{i}(iii))-V(end-k+1,i) - Q*dt*(j-1)*(i==M) + Q*dt*(j-1)*(i==P) ) ] ) ;
+    end
+end
+worst_in_section = 0 ;
+for i = 1:size(V,2)
+    worst_in_section = worst_in_section + get_accum_size(V_min_temp{i}, V_max_temp{i} ,chi,K) ;
+end
+disp(next_index)
+disp( ['Next index is ', next_index, 'But the size of J is', size(J,1), 'by ', size(J,2) ] )
+J = max([J(next_index,end-k+1) , worst_in_section]) ; % do any points between the two DP time steps require larger accumulators?
+end
+
+
+
+function [M,P] = valve_orientation(n,ii)
+% Called by calculate_cost
+
+% There are n+1 rails
+% M = 0 means that tank is motoring
+% P = 1 means that the first rail is pumping
+M = floor(ii/n);
+P = mod(n,ii);
+end
+
+
+
+function next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,n,iii)
+% Called by calculate_cost
+% Given initial index iii, what is the net index if we motor rail M and pump to rail P?
+possible_indeces = zeros(size(indexer{1}')) ;
+for i = 1:n
+    possible_indeces = possible_indeces + ( V_options{i}(indexer{i}) == V_options{i}(indexer{i}(iii))- Q*DPdt*(i==M) + Q*DPdt*(i==P) ) ;
+end
+disp(possible_indeces)
+next_index = find(possible_indeces) ;
 end
