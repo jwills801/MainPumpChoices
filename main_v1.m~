@@ -9,38 +9,29 @@ clear, close all
 load('JCB5T_C0P_3CPR_Flows.mat')
 % Posative flow is flow leaving the accumulator
 dt = t(2);
-V1 = cumsum(QR_3)*dt;
-V2 = cumsum(QR_1)*dt;
-V3 = cumsum(QR_1)*dt;
-V = [V1 V2];
+V1 = cumsum(QR_1)*dt;
+V2 = cumsum(QR_2)*dt;
+V3 = cumsum(QR_3)*dt;
+V = [V1 V3];
 %V = [V1 V2 V3];
-%figure, plot(t,V1*1e3,t,V2*1e3)
+figure, plot(t,V*1e3)
 %legend('Rail 1','Rail 2'), ylabel('Volume (L)'), xlabel('Time (s)')
 
 
-DPdt = 1; % How quickly can we switch between rails?
+DPdt = 5; % How quickly can we switch between rails?
 dtscale = DPdt/dt; % Step through DP at a different time step than the one given by Drive Cycle
 DPt = 0:DPdt:t(end);
 
 % Set flow rate and cost to switch
 Qave = max(abs(V(end,:)/t(end)));
-Q = 7.6826e-04;
-Cost2Switch = 0*1e-2;
+Q = 4e-04;
 
 chi = .1;
 K = 1.4; % ratio of specific heats - note that it is capitilized
 
+[V_options, nn] = make_V_options(V,Q,DPdt);
 % nn is the number of discrete volumes which will be used to make up the
 % state space. This is determined from the maximum and minimum volumes for each rail
-ss_top = max(V,[],1); % Top of state space
-ss_bottom = min(V,[],1); % Bottom of state space
-nn = ceil( (ss_top-ss_bottom)/Q/DPdt ) + 4 ; % 1x2 vector
-
-% Make V_options - which is a matrix of possible values of V_p at each time
-for i = 1:size(V,2)
-    V_options{i} = [0 cumsum(Q*DPdt*ones(1,nn(i)-1)) ] + ss_bottom(i) - 2*Q*DPdt; % I wanted to give a little extra space on the top
-    % and bottom of the state space above and below the min and max of the flow
-end
 
 % Initilize matrices
 J   = NaN(prod(nn),length(DPt));
@@ -48,14 +39,8 @@ ind = NaN(prod(nn),length(DPt));
 for i = 1:size(V,2), V_min{i} = J; V_max{i} = J;  end
 
 % make indexers
-lhs = [ '[ temp{1} ' ] ;
-rhs = [ 'ndgrid( 1:nn(1) ' ] ;
-for i = 2:size(V,2)
-    lhs = [ lhs ', temp{' num2str(i) '} ' ] ;
-    rhs = [ rhs ', 1:nn(' num2str(i) ') ' ] ;
-end
-eval( [lhs '] = ' rhs ') ;'] )
-for i = 1:size(V,2), indexer{i} = temp{i}(:); end
+indexer = make_indexer(nn,size(V,2));
+
 
 % V min and max at the end of the time considered
 for i = 1:size(V,2)
@@ -80,100 +65,56 @@ for k = 1:length(DPt)-1
             [u(ii), V_min_temp(:,ii), V_max_temp(:,ii)] = calculate_cost(J,t_ind,dtscale,V_min,V_max,V_options,indexer,V,Q,DPdt,iii,ii,k,nn,dt,chi,K) ;
         end
         [J(iii,end-k),ind(iii,end-k)] = min(u); % Which choice to make if you find yourself at state iii at time end-k
-        [V_min, V_max] = update_V_max_min(V_min_temp,V_max_temp,V_min,V_max,ind(iii,end-k)); % using this decison, what are the new V_min and V_max?
+        [V_min, V_max] = update_V_max_min(V_min_temp,V_max_temp,V_min,V_max,ind(iii,end-k),iii,k); % using this decison, what are the new V_min and V_max?
     end
+    display_percent_done(k,length(DPt));
 end
-
-
-
-return
-for k = 1:length(DPt)-1
-    [~,t_ind] = min(abs(t-(t(end)-k*DPdt)));
-    
-    delV1 = -(V1(t_ind:t_ind+dtscale-1)-V_options(1));
-    delV2 = -(V1(t_ind:t_ind+dtscale-1)-V_options(1));
-    V1_min(1,end-k) = min([V1_min(1,end-k+1), min(delV1)]);
-    V1_max(1,end-k) = max([V1_max(1,end-k+1), max(delV1)]);
-    V2_min(1,end-k) = min([V2_min(1,end-k+1), min(delV2)]);
-    V2_max(1,end-k) = max([V2_max(1,end-k+1), max(delV2)]);
-
-    J(1,end-k) = get_accum_size(V1_min(1,end-k+1),V1_max(1,end-k+1),chi,K) + get_accum_size(V2_min(1,end-k+1),V2_max(1,end-k+1),chi,K);
-
-    ind(1,end-k) = 4;
-    for j = 2:nn^size(V,2)
-        if V_options(X(j)) == max(V_options) % The case where rail 1 should not be filled anymore
-            [~,ind(j,end-k)] = min([J(j-1,end-k+1)+Cost2Switch*(ind(j,end-k+1)==2|ind(j,end-k+1)==3|ind(j,end-k+1)==4),inf,inf,J(j,end-k+1)+Cost2Switch*(ind(j,end-k+1)==1|ind(j,end-k+1)==2|ind(j,end-k+1)==3)]);
-            
-        elseif V_options(Y(j)) == min (V_options) % The case where rail 2 should not be emptied anymore
-            [~,ind(j,end-k)] = min([inf,inf,J(j-length(V_MP1),end-k+1)+Cost2Switch*(ind(j-length(V_MP1),end-k+1)==1|ind(j-length(V_MP1),end-k+1)==2|ind(j-length(V_MP1),end-k+1)==4),J(j,end-k+1)+Cost2Switch*(ind(j,end-k+1)==1|ind(j,end-k+1)==2|ind(j,end-k+1)==3)]);
-            %J(j,end-k) = max( [ J(j,end-k) , abs(V(t_ind,1)-V_MP(X(j))) + abs(V(t_ind,2)-V_MP(Y(j))) ] );            
-            
-        else
-            [~,ind(j,end-k)] = min([J(j-1,end-k+1)+Cost2Switch*(ind(j,end-k+1)==2|ind(j,end-k+1)==3|ind(j,end-k+1)==4),J(j-1-length(V_MP1),end-k+1)+Cost2Switch*(ind(j-1-length(V_MP1),end-k+1)==1|ind(j-1- length(V_MP1),end-k+1)==3|ind(j-1- length(V_MP1),end-k+1)==4),J(j-length(V_MP1),end-k+1)+Cost2Switch*(ind(j-length(V_MP1),end-k+1)==1|ind(j-length(V_MP1),end-k+1)==2|ind(j-length(V_MP1),end-k+1)==4),J(j,end-k+1)+Cost2Switch*(ind(j,end-k+1)==1|ind(j,end-k+1)==2|ind(j,end-k+1)==3)]);
-            %J(j,end-k) = max([J(j,end-k) , abs(V(t_ind,1)-V_MP(X(j))) + abs(V(t_ind,2)-V_MP(Y(j))) ] ); 
-            %J(j,end-k) = J(j,end-k) + abs(V(t_ind,1)-V_MP(X(j))) + abs(V(t_ind,2)-V_MP(Y(j))); 
-            
-        end
-
-        delV1 = -(V(t_ind:t_ind+dtscale-1,1)-V_options(X(j)));
-        delV2 = -(V(t_ind:t_ind+dtscale-1,2)-V_options(Y(j)));
-
-        if ind(j,end-k) == 1
-            V1_min(j,end-k) = min([V1_min(j-1,end-k+1), min(delV1)]);
-            V1_max(j,end-k) = max([V1_max(j-1,end-k+1), max(delV1)]);
-            V2_min(j,end-k) = min([V2_min(j-1,end-k+1), min(delV2)]);
-            V2_max(j,end-k) = max([V2_max(j-1,end-k+1), max(delV2)]);
-        elseif ind(j,end-k) == 2
-            V1_min(j,end-k) = min([V1_min(j-1-length(V_MP1),end-k+1), min(delV1)]);
-            V1_max(j,end-k) = max([V1_max(j-1-length(V_MP1),end-k+1), max(delV1)]);
-            V2_min(j,end-k) = min([V2_min(j-1-length(V_MP1),end-k+1), min(delV2)]);
-            V2_max(j,end-k) = max([V2_max(j-1-length(V_MP1),end-k+1), max(delV2)]);
-        elseif ind(j,end-k) == 3
-            V1_min(j,end-k) = min([V1_min(j-length(V_MP1),end-k+1), min(delV1)]);
-            V1_max(j,end-k) = max([V1_max(j-length(V_MP1),end-k+1), max(delV1)]);
-            V2_min(j,end-k) = min([V2_min(j-length(V_MP1),end-k+1), min(delV2)]);
-            V2_max(j,end-k) = max([V2_max(j-length(V_MP1),end-k+1), max(delV2)]);
-        else
-            V1_min(j,end-k) = min([V1_min(j,end-k+1), min(delV1)]);
-            V1_max(j,end-k) = max([V1_max(j,end-k+1), max(delV1)]);
-            V2_min(j,end-k) = min([V2_min(j,end-k+1), min(delV2)]);
-            V2_max(j,end-k) = max([V2_max(j,end-k+1), max(delV2)]);
-        end
-
-        J(j,end-k) = get_accum_size(V1_min(j,end-k),V1_max(j,end-k),chi,K) + get_accum_size(V2_min(j,end-k),V2_max(j,end-k),chi,K);
-
-
-    end
-    
-    
-    
-    PercentDone = 100*k/length(DPt);
-    if rem(PercentDone,10) < 100/length(DPt)
-        PercentDone = (round(PercentDone,-1))
-    end
-end
-PercentDone = 100
-
-
 
 %% Get optimal solution back out
-% We have to start at zero flow
-MinCost = min(J(end,1))
-get_accum_size(V1_min(end,1),V1_max(end,1),chi,K) + get_accum_size(V2_min(end,1),V2_max(end,1),chi,K)
-
-current_ind = NaN(size(J,2));
-current_ind(1) = size(J,1);
-for ii = 1:length(DPt)-1
-    if ind(current_ind(ii),ii) == 1
-        current_ind(ii+1) = current_ind(ii)-1;
-    elseif ind(current_ind(ii),ii) == 2
-        current_ind(ii+1) = current_ind(ii) - 1 - length(V_MP1);
-    elseif ind(current_ind(ii),ii) == 3
-        current_ind(ii+1) = current_ind(ii) - length(V_MP1);
-    elseif ind(current_ind(ii),ii) == 4
-        current_ind(ii+1) = current_ind(ii);
-    end
+% We have to start at zero deltaV in each rail
+zero_indices = zeros(1,length(indexer{1})) == 0;
+for i = 1:size(V,2)
+        zero_indices = zero_indices & (V_options{i}(indexer{i}) == 0) ;
 end
+zero_ind = find(zero_indices); % The index where all rails are at zero deltaV
+
+% Check that cost matches up with what V_min and V_max are
+total_accum_size_calc1 = 0;
+for i = 1:size(V,2)
+    total_accum_size_calc1 = total_accum_size_calc1 + get_accum_size(V_min{i}(zero_ind,1),V_max{i}(zero_ind,1),chi,K);
+end
+abs( total_accum_size_calc1 - min(J(zero_ind,1)) ) / total_accum_size_calc1 < 1e-3 
+
+% Get vector of relevant indices
+decision_ind(1) = ind(zero_ind,1);
+for k = 2:length(DPt)
+    decision_ind(k) = ind(decision_ind(k-1),k-1); % the decision now of where we want to be come next time step
+end
+figure, plot(DPt,decision_ind)
+
+% What is the volume that the main pump provides over time?
+V_MP = zeros(1,size(V,2)) ; 
+for k = 1:length(DPt)-1
+    [M,P] = valve_orientation(size(V,2),decision_ind(k)) ;
+    m(k) = M;
+    p(k) = P;
+    V_MP_temp = NaN(dtscale,size(V,2));
+    for i = 1:size(V,2)
+        V_MP_temp(:,i) = V_MP(end,i) + cumsum(Q*dt*ones(dtscale,1))*(P==i) - cumsum(Q*dt*ones(dtscale,1))*(M==i) ;
+    end
+    V_MP = [V_MP; V_MP_temp];
+end
+
+figure, plot(t,V_MP*1e3)
+
+deltaV = V_MP - V;
+for i = 1:size(V,2)
+    abs( min(deltaV(i,:)) - V_min{i}(zero_ind,1) ) ;
+    abs( max(deltaV(i,:)) - V_max{i}(zero_ind,1) ) ;
+end
+return
+
+
 
 % Find what the volume looks like at each time
 V_p1 = 0;
@@ -247,6 +188,7 @@ end
 
 
 
+
 function Vt = get_accum_size(Vmin,Vmax,chi,k)
     Vmin = min([0,Vmin]);
     Vmax = max([0,Vmax]);
@@ -269,7 +211,9 @@ function [J, V_min_temp, V_max_temp] = calculate_cost(J,t_ind,dtscale,V_min,V_ma
 next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,size(V,2),iii,nn) ; % Which index position we are moving to as a reults of M and P
 if isempty(next_index)
     J = NaN ; % If next_index is empty, this means that the rail we are going to is outside of the state space
+    V_min_temp = NaN; V_max_temp = NaN;
 else
+    V_min_temp = NaN(size(V,2),1); V_max_temp = NaN(size(V,2),1);
     for i = 1:size(V,2)
         V_min_temp(i,1) = V_min{i}(next_index,end-k+1); % Intiliaize with the Max and min volume differences from the index we going to on the next time step
         V_max_temp(i,1) = V_max{i}(next_index,end-k+1);
@@ -309,6 +253,17 @@ end
 end
 
 
+function [V_min, V_max] = update_V_max_min(V_min_temp,V_max_temp,V_min,V_max,decision,iii,k)
+% Called in the main program - inside the for loop which goes over each time step
+% This code just puts the V_min_temp from the choice we made into the actual V_min thank we will use later
+    for i = 1:length(V_min)
+        V_min{i}(iii,end-k) = V_min_temp(i,decision);
+        V_max{i}(iii,end-k) = V_max_temp(i,decision);
+        % decision tells us which for the options we chose this time step (there are (n+1)^2-n options for n rails)
+    end
+end
+
+
 
 function next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,n,iii,nn)
 % Called by calculate_cost
@@ -316,7 +271,59 @@ function next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,n,iii,nn)
 possible_indeces = zeros(1,prod(nn)) == 0;
 for i = 1:n
     temp = V_options{i}(indexer{i}) - (V_options{i}(indexer{i}(iii))- Q*DPdt*(i==M) + Q*DPdt*(i==P)) ; 
-    possible_indeces = possible_indeces & abs(temp)<1e-3 ;
+    possible_indeces = possible_indeces & abs(temp)<1e-9 ;
 end
 next_index = find(possible_indeces) ;
+end
+
+
+function display_percent_done(k,kf)
+% Called in the main DP for loop looping over time
+% Display what percent done the for loop is - only at key percentages, like 10 percent
+if kf > 100
+    step = 100/(kf-1); % The finest step that is ever made
+    events = [1:1:9, 10:10:100];
+
+    event_occur = find( abs( events - k*100/(kf-1) ) < step/2 );
+    if ~ isempty(event_occur)
+        disp(['Dynamic programing loop is ' num2str(events(event_occur)) '% complete'])
+    end
+else
+    disp(['Dynamic programing loop is ' num2str(round(k*100/(kf-1))) '% complete'])
+end
+end
+
+
+
+function [V_options, nn] = make_V_options(V,Q,DPdt)
+% Called in main program before main DP loop
+
+% nn is the number of discrete volumes which will be used to make up the
+% state space. This is determined from the maximum and minimum volumes for each rail
+ss_top = max(V,[],1); % Top of state space
+ss_bottom = min(V,[],1); % Bottom of state space
+nn_pos = ceil( ss_top/Q/DPdt )     + 2 ; % 1x2 vector  - how many steps would it take to get to the top of the state space?
+nn_neg = ceil( -ss_bottom/Q/DPdt ) + 2; % The plus two is to give a little room on the top and bottom of the state space
+
+% Make V_options - which is a matrix of possible values of V_p at each time
+for i = 1:size(V,2)
+    negative_portion = fliplr(cumsum(-Q*DPdt*ones(1,nn_neg(i)-1)));
+    positive_portion = cumsum(Q*DPdt*ones(1,nn_pos(i)-1));
+    V_options{i} = [negative_portion 0 positive_portion];
+    nn(1,i) = size(V_options{i},2);
+end
+end
+
+
+
+function indexer = make_indexer(nn,n)
+% Makes indexer for V_options - this indexer creates a mesh grid so that each index results in a unique point in state space
+lhs = [ '[ temp{1} ' ] ;
+rhs = [ 'ndgrid( 1:nn(1) ' ] ;
+for i = 2:n
+    lhs = [ lhs ', temp{' num2str(i) '} ' ] ;
+    rhs = [ rhs ', 1:nn(' num2str(i) ') ' ] ;
+end
+eval( [lhs '] = ' rhs ') ;'] )
+for i = 1:n, indexer{i} = temp{i}(:); end
 end
