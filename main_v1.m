@@ -17,17 +17,38 @@ figure, plot(t,V*1e3)
 %legend('Rail 1','Rail 2'), ylabel('Volume (L)'), xlabel('Time (s)')
 
 
-DPdt = 1; % How quickly can we switch between rails?
+DPdt = .2; % How quickly can we switch between rails?
 
 % Set flow rate and cost to switch
 Qave = max(abs(V(end,:)/t(end)));
-Q = 8e-04;
+N = 10;
+Q_vals = linspace(10,20,N)*Qave;
 
 chi = .1;
 K = 1.4; % ratio of specific heats - note that it is capitilized in the functions to not mess with for loop k
 
+%% Loop over various flow rates
+include_graphs = 0;
+for i = 1:length(Q_vals)
+    Q = Q_vals(i);
+    accum_sizes(i,:) = main(t,V,DPdt,Q,chi,K,include_graphs) ;
+    disp([num2str(i) ' of ' num2str(length(Q_vals)) ' flow rates have been tested']) ;
+end
 
-main(t,V,DPdt,Q,chi,K)
+figure, plot(Q_vals*60e3,sum(accum_sizes,2)*1e3)
+ylabel('\textbf{Sum of accumulator sizes (L)}','interpreter','latex'), xlabel('\textbf{Flow Rate (LPM)}','interpreter','latex')
+legend(['Ts = ' num2str(DPdt*1e3) ' ms']), grid
+
+save(['Accum_size_norm' num2str(DPdt*1e3) '.mat'],'Q_vals','accum_sizes')
+
+
+
+%% Analyse the case with a specific flow rate
+[~,best_flow_rate_ind] = min( sum(accum_sizes,2) ) ;
+best_Q = Q_vals(best_flow_rate_ind);
+disp(['Best flow rate is ' num2str(best_Q*60e3,3) ' LPM'])
+include_graphs = 1;
+accum_sizes = main(t,V,DPdt,best_Q,chi,K,include_graphs) ;
 
 
 
@@ -39,7 +60,8 @@ main(t,V,DPdt,Q,chi,K)
 
 
 
-function main(t,V,DPdt,Q,chi,K)
+function [accum_sizes] = main(t,V,DPdt,Q,chi,K,include_graphs)
+
 dt = t(2);
 dtscale = DPdt/dt; % Step through DP at a different time step than the one given by Drive Cycle
 DPt = 0:DPdt:t(end);
@@ -55,6 +77,8 @@ for i = 1:size(V,2), V_min{i} = J; V_max{i} = J;  end
 
 % make indexers
 indexer = make_indexer(nn,size(V,2));
+
+change_in_ind = make_change_in_index_vector(V_options,indexer,size(V,2),nn,Q,DPdt) ;
 
 
 % V min and max at the end of the time considered
@@ -77,7 +101,7 @@ for k = 1:length(DPt)-1
     [~,t_ind] = min(abs(t-(t(end)-k*DPdt))); % The time indice for the fine time mesh
     for iii = 1:prod(nn) % Each option in the state space
         for ii = 1:((size(V,2)+1)^2-size(V,2)) % Loop though all the possible decisions at this state and time
-            [u(ii), V_min_temp(:,ii), V_max_temp(:,ii)] = calculate_cost(J,t_ind,dtscale,V_min,V_max,V_options,indexer,V,Q,DPdt,iii,ii,k,nn,dt,chi,K) ;
+            [u(ii), V_min_temp(:,ii), V_max_temp(:,ii)] = calculate_cost(J,t_ind,dtscale,V_min,V_max,V_options,indexer,change_in_ind,V,Q,iii,ii,k,nn,dt,chi,K) ;
         end
         [J(iii,end-k),ind(iii,end-k)] = min(u); % Which choice to make if you find yourself at state iii at time end-k
         [V_min, V_max] = update_V_max_min(V_min_temp,V_max_temp,V_min,V_max,ind(iii,end-k),iii,k); % using this decison, what are the new V_min and V_max?
@@ -103,12 +127,10 @@ checks = [checks, abs( total_accum_size_calc1 - min(J(zero_ind,1)) ) / total_acc
 
 % Get vector of relevant indices
 decision_ind(1) = ind(zero_ind,1);
-[M,P] = valve_orientation(size(V,2),decision_ind(1)) ;
-next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,size(V,2),zero_ind,nn) ;
+next_index = get_next_index(change_in_ind,decision_ind(1),zero_ind,nn) ;
 for k = 2:length(DPt)-1
     decision_ind(k) = ind(next_index,k); % the decision now of where we want to be come next time step
-    [M,P] = valve_orientation(size(V,2),decision_ind(k)) ;
-    next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,size(V,2),next_index,nn) ;
+    next_index = get_next_index(change_in_ind,decision_ind(k),next_index,nn) ;
 end
 
 % What is the volume that the main pump provides over time?
@@ -139,10 +161,13 @@ else
 end
 
 for i = 1:size(V,2)
-    disp(['Accumulator volume on rail ' num2str(i) ' is: ' num2str(get_accum_size(min(deltaV(:,i)),max(deltaV(:,i)),chi,K)*1e3,3) ' L']);
+    accum_sizes(i) = get_accum_size(min(deltaV(:,i)),max(deltaV(:,i)),chi,K) ; %m^3
+    disp(['Accumulator volume on rail ' num2str(i) ' is: ' num2str(accum_sizes(i)*1e3,3) ' L']);
 end
 %
-make_plots(t,V,V_MP,chi,K);
+if include_graphs == 1
+    make_plots(t,V,V_MP,chi,K);
+end
 %make_table(delV_min,delV_max);
 
 end
@@ -167,16 +192,16 @@ end
 
 
 
-function [J, V_min_temp, V_max_temp] = calculate_cost(J,t_ind,dtscale,V_min,V_max,V_options,indexer,V,Q,DPdt,iii,ii,k,nn,dt,chi,K)
+function [J, V_min_temp, V_max_temp] = calculate_cost(J,t_ind,dtscale,V_min,V_max,V_options,indexer,change_in_ind,V,Q,iii,ii,k,nn,dt,chi,K)
 %% iii is the index we are currently at
 % We want to calculate the cost of going to another index indicated by configuration ii
-[M,P] = valve_orientation(size(V,2),ii) ; % Which rail is pumping and which is motoring. P = 1 means rail 1 is pumping
-next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,size(V,2),iii,nn) ; % Which index position we are moving to as a reults of M and P
+[M,P] = valve_orientation(size(V,2),ii);
+next_index = get_next_index(change_in_ind,ii,iii,nn) ;
 if isempty(next_index)
     J = NaN ; % If next_index is empty, this means that the rail we are going to is outside of the state space
     V_min_temp = NaN; V_max_temp = NaN;
 elseif length(next_index) >1
-    next_index
+    error(['next_index is too long. next_index = ' num2str(next_index)])
 else
     V_min_temp = NaN(size(V,2),1); V_max_temp = NaN(size(V,2),1);
     for i = 1:size(V,2)
@@ -230,15 +255,50 @@ end
 
 
 
-function next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,n,iii,nn)
-%% Called by calculate_cost
-% Given initial index iii, what is the net index if we motor rail M and pump to rail P?
-possible_indeces = ones(1,prod(nn));
-for i = 1:n
-    temp = V_options{i}(indexer{i}) - (V_options{i}(indexer{i}(iii))- Q*DPdt*(i==M) + Q*DPdt*(i==P)) ; 
-    possible_indeces = possible_indeces & abs(temp)<1e-9 ;
+function [change_in_ind] = make_change_in_index_vector(V_options,indexer,n,nn,Q,DPdt)
+%% calculate how to go from one position in state space to another given which option you are choosing
+ii_vals = 1:(n+1)^2-n ; 
+flag = 0;
+iii = 1;
+change_in_ind = []; % The difference between where you are and where youre going
+while flag == 0
+    for ii = ii_vals
+        [M,P] = valve_orientation(n,ii) ;
+        possible_indeces = ones(1,prod(nn));
+        for i = 1:n
+            temp = V_options{i}(indexer{i}) - (V_options{i}(indexer{i}(iii))- Q*DPdt*(i==M) + Q*DPdt*(i==P)) ;
+            possible_indeces = possible_indeces & abs(temp)<1e-9 ;
+        end
+        next_index = find(possible_indeces) ;
+        if ~isempty(next_index)
+            change_in_ind(ii) = iii - next_index ;
+            ii_vals(ii==ii_vals) =[]; % now remove ii from the list of indices we need to try
+        end
+    end
+    % if change_in_ind has all the entries necessary, then we can stop
+    if isempty(ii_vals)
+        flag = 1;
+    end
+
+
+    % Don't let the loop run forver
+    if iii >= length(indexer{1})
+        flag = -1;
+        error('Error occured in the function "make_change_in_index_vector"')
+    end
+    iii = iii+ 1;
 end
-next_index = find(possible_indeces) ;
+end
+
+
+
+function next_index = get_next_index(change_in_ind,ii,iii,nn)
+%% Called by calculate_cost
+% Given initial index iii, what is the net index if we do action ii
+next_index = iii - change_in_ind(ii) ;
+if next_index > prod(nn) || next_index <= 0
+    next_index = [];
+end
 end
 
 
@@ -299,7 +359,7 @@ function make_table(delV_min,delV_max)
 %% Make table for changing perc_threshold
 thresh_vals = [.05 .1 .2] ;
 k_vals = [1 1.4];
-[a b] = ndgrid(thresh_vals,k_vals);
+[a, b] = ndgrid(thresh_vals,k_vals);
 a = a(:); b = b(:);
 for i = 1:length(a)
     chi = a(i);
