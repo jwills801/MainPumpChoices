@@ -8,26 +8,41 @@ clear, close all
 % Load Drive Cycle
 load('JCB5T_C0P_3CPR_Flows.mat')
 % Posative flow is flow leaving the accumulator
-dt = t(2);
-V1 = cumsum(QR_1)*dt;
-V2 = cumsum(QR_2)*dt;
-V3 = cumsum(QR_3)*dt;
+V1 = cumsum(QR_1)*t(2);
+V2 = cumsum(QR_2)*t(2);
+V3 = cumsum(QR_3)*t(2);
 V = [V1 V3];
 %V = [V1 V2 V3];
 figure, plot(t,V*1e3)
 %legend('Rail 1','Rail 2'), ylabel('Volume (L)'), xlabel('Time (s)')
 
 
-DPdt = 5; % How quickly can we switch between rails?
-dtscale = DPdt/dt; % Step through DP at a different time step than the one given by Drive Cycle
-DPt = 0:DPdt:t(end);
+DPdt = 1; % How quickly can we switch between rails?
 
 % Set flow rate and cost to switch
 Qave = max(abs(V(end,:)/t(end)));
-Q = 4e-04;
+Q = 8e-04;
 
 chi = .1;
-K = 1.4; % ratio of specific heats - note that it is capitilized
+K = 1.4; % ratio of specific heats - note that it is capitilized in the functions to not mess with for loop k
+
+
+main(t,V,DPdt,Q,chi,K)
+
+
+
+
+
+
+
+%% Functions!!!
+
+
+
+function main(t,V,DPdt,Q,chi,K)
+dt = t(2);
+dtscale = DPdt/dt; % Step through DP at a different time step than the one given by Drive Cycle
+DPt = 0:DPdt:t(end);
 
 [V_options, nn] = make_V_options(V,Q,DPdt);
 % nn is the number of discrete volumes which will be used to make up the
@@ -70,7 +85,7 @@ for k = 1:length(DPt)-1
     display_percent_done(k,length(DPt));
 end
 
-%% Get optimal solution back out
+% Get optimal solution back out
 % We have to start at zero deltaV in each rail
 zero_indices = zeros(1,length(indexer{1})) == 0;
 for i = 1:size(V,2)
@@ -83,25 +98,23 @@ total_accum_size_calc1 = 0;
 for i = 1:size(V,2)
     total_accum_size_calc1 = total_accum_size_calc1 + get_accum_size(V_min{i}(zero_ind,1),V_max{i}(zero_ind,1),chi,K);
 end
-abs( total_accum_size_calc1 - min(J(zero_ind,1)) ) / total_accum_size_calc1 < 1e-3 
+checks = [];
+checks = [checks, abs( total_accum_size_calc1 - min(J(zero_ind,1)) ) / total_accum_size_calc1 < 1e-3 ];
 
 % Get vector of relevant indices
 decision_ind(1) = ind(zero_ind,1);
 [M,P] = valve_orientation(size(V,2),decision_ind(1)) ;
 next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,size(V,2),zero_ind,nn) ;
-for k = 2:length(DPt)
-    [M,P] = valve_orientation(size(V,2),decision_ind(k-1)) ;
+for k = 2:length(DPt)-1
+    decision_ind(k) = ind(next_index,k); % the decision now of where we want to be come next time step
+    [M,P] = valve_orientation(size(V,2),decision_ind(k)) ;
     next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,size(V,2),next_index,nn) ;
-    decision_ind(k) = ind(next_index,k-1); % the decision now of where we want to be come next time step
 end
-figure, plot(DPt,decision_ind)
 
 % What is the volume that the main pump provides over time?
 V_MP = zeros(1,size(V,2)) ; 
 for k = 1:length(DPt)-1
     [M,P] = valve_orientation(size(V,2),decision_ind(k)) ;
-    m(k) = M;
-    p(k) = P;
     V_MP_temp = NaN(dtscale,size(V,2));
     for i = 1:size(V,2)
         V_MP_temp(:,i) = V_MP(end,i) + cumsum(Q*dt*ones(dtscale,1))*(P==i) - cumsum(Q*dt*ones(dtscale,1))*(M==i) ;
@@ -109,87 +122,30 @@ for k = 1:length(DPt)-1
     V_MP = [V_MP; V_MP_temp];
 end
 
-figure, plot(t,V_MP*1e3)
 
 deltaV = V_MP - V;
 for i = 1:size(V,2)
-    abs( min(deltaV(i,:)) - V_min{i}(zero_ind,1) ) ;
-    abs( max(deltaV(i,:)) - V_max{i}(zero_ind,1) ) ;
+    checks = [checks, ...
+        abs( min(deltaV(:,i)) - V_min{i}(zero_ind,1) ) < 1e-9 ...
+        & ...
+        abs( max(deltaV(:,i)) - V_max{i}(zero_ind,1) ) < 1e-9 ...
+        ] ;
 end
 
-figure, plot(t,V*1e3,t,V_MP*1e3), legend
-return
-
-
-
-% Find what the volume looks like at each time
-V_p1 = 0;
-V_p2 = 0;
-for jj = 1:length(DPt)-1
-    V_p1(jj+1) = V_p1(jj) + (ind(current_ind(jj),jj)==2|ind(current_ind(jj),jj)==3)*Q*DPdt;
-    V_p2(jj+1) = V_p2(jj) - (ind(current_ind(jj),jj)==1|ind(current_ind(jj),jj)==2)*Q*DPdt;
+if sum(checks) == length(checks)
+    disp('All checks were successful')
+else
+    error(['Check ' num2str(find(~checks)) ' failed. See main function for checks.'])
 end
 
-
-% What is the required accumulator size?
-for i = 1:length(t)
-    [~,DPt_ind] = min(abs( DPt - t(i) + DPdt/2 - t(2)));
-    DelV1(i) =  V_p1(DPt_ind) - V(i,1);
-    DelV2(i)=  V_p2(DPt_ind) - V(i,2);
+for i = 1:size(V,2)
+    disp(['Accumulator volume on rail ' num2str(i) ' is: ' num2str(get_accum_size(min(deltaV(:,i)),max(deltaV(:,i)),chi,K)*1e3,3) ' L']);
 end
-%figure, plot(t,DelV1), ylabel('$\Delta V (m^3)$','interpreter','latex'), xlabel('Time (s)','interpreter','latex')
-%figure, plot(t,DelV2), ylabel('$\Delta V (m^3)$','interpreter','latex'), xlabel('Time (s)','interpreter','latex')
+%
+make_plots(t,V,V_MP,chi,K);
+%make_table(delV_min,delV_max);
 
-
-delV_max1 = max(DelV1) ; [delV_max1, V1_max(end,1)]
-delV_min1 = min(DelV1) ; [delV_min1, V1_min(end,1)]
-delV_max2 = max(DelV2) ; [delV_max2, V2_max(end,1)]
-delV_min2 = min(DelV2) ; [delV_min2, V2_min(end,1)]
-Accumulator_size1_actual = get_accum_size(delV_min1,delV_max1,chi,K);
-Accumulator_size2_actual = get_accum_size(delV_min2,delV_max2,chi,K);
-
-Total_Accum = Accumulator_size1_actual + Accumulator_size2_actual
-
-figure
-plot(t,V*1e3,DPt,V_p1*1e3,DPt,V_p2*1e3), legend('Rail 1 Flow','Rail 2 Flow','Flow delivered to Rail 1 by Pump','Flow delivered to Rail 2 by Pump','Location','NorthWest')
-%title(['Accumulator Sizes = [',num2str(Accumulator_size1_actual*1000),' , ',num2str(Accumulator_size2_actual*1000) , ']',' Liters'])
-ylabel('Volume (L)'), xlabel('Time (s)')
-
-%% Plot Fluid volume in each accum
-Vf1 = DelV1 - delV_min1;
-Vf2 = DelV2 - delV_min2;
-
-figure, plot(t,Vf1*1e3,t,Vf2*1e3), xlabel('Time (s)'), ylabel('Volume (L)')
-
-%% plot Pressure in each accum
-P1_over_Prail = ( (Accumulator_size1_actual+delV_min1) ./ (Accumulator_size1_actual - Vf1) ).^K;
-P2_over_Prail = ( (Accumulator_size2_actual+delV_min2) ./ (Accumulator_size2_actual - Vf2) ).^K;
-
-figure, plot(t,P1_over_Prail-1,t,P2_over_Prail-1), xlabel('Time (s)'), ylabel('$\frac{|P(t) - P_{rail}|}{P_{rail}}$','interpreter','latex','FontSize',22.5), hold on
-plot([0, t(end)],[chi, chi],'k--',[0, t(end)],[-chi, -chi],'--k'), ylim(1.25*[-chi chi]), hold off
-
-ylh = get(gca,'ylabel');
-gyl = get(ylh);                                                         % Object Information
-ylp = get(ylh, 'Position');
-set(ylh, 'Rotation',0, 'Position',ylp, 'VerticalAlignment','middle', 'HorizontalAlignment','center')
-
-
-%% Make table for changing perc_threshold
-thresh_vals = [.05 .1 .2] ;
-k_vals = [1 1.4];
-[a b] = ndgrid(thresh_vals,k_vals);
-a = a(:); b = b(:);
-for i = 1:length(a)
-    chi = a(i);
-    K = b(i);
-    Accumulator_Size(i) = get_accum_size(delV_min1,delV_max1,chi,K);
 end
-[a b Accumulator_Size'*1000]
-
-%% Functions!
-
-
-
 
 
 
@@ -335,4 +291,57 @@ for i = 2:n
 end
 eval( [lhs '] = ' rhs ') ;'] )
 for i = 1:n, indexer{i} = temp{i}(:); end
+end
+
+
+
+function make_table(delV_min,delV_max)
+%% Make table for changing perc_threshold
+thresh_vals = [.05 .1 .2] ;
+k_vals = [1 1.4];
+[a b] = ndgrid(thresh_vals,k_vals);
+a = a(:); b = b(:);
+for i = 1:length(a)
+    chi = a(i);
+    K = b(i);
+    Accumulator_Size(i) = get_accum_size(delV_min,delV_max,chi,K);
+end
+[a b Accumulator_Size'*1000]
+end
+
+
+
+
+function make_plots(t,V,V_MP,chi,K)
+%%
+% make legend for volume plot
+legend_str1 = ['legend( '];
+legend_str2 = [''];
+for i = 1:size(V,2)
+    if i == 1 
+        legend_str1 = [legend_str1 '"Flow required by rail ' num2str(i) '"'] ;
+    else
+        legend_str1 = [legend_str1 ' , "Flow required by rail ' num2str(i) '"'] ;
+    end
+    legend_str2 = [legend_str2 ' , "Flow provided to rail ' num2str(i) '"'] ;
+end
+figure, plot(t,V*1e3,t,V_MP*1e3), ylabel('Volume (L)'), xlabel('Time (s)'), eval([legend_str1 legend_str2 ')' ])
+
+
+% Plot Fluid volume in each accum
+deltaV = V_MP - V ;
+for i = 1:size(V,2)
+    V_f(:,i) = deltaV(:,i) - min(deltaV(:,i)) ;
+end
+
+figure, plot(t,V_f*1e3), xlabel('Time (s)'), ylabel('Volume (L)')
+
+%% plot Pressure in each accum
+for i = 1:size(V,2)
+    delV_min = min(deltaV(:,i));
+    accum_size = get_accum_size(delV_min,max(deltaV(:,i)),chi,K) ;
+    percent_P_error(:,i) = ( (accum_size+delV_min) ./ (accum_size - V_f(:,i)) ).^K - 1;
+end
+figure, plot(t,percent_P_error), xlabel('Time (s)'), ylabel('Percent Error in Pressure'), hold on
+plot([0, t(end)],[chi, chi],'k--',[0, t(end)],[-chi, -chi],'--k'), ylim(1.25*[-chi chi]), hold off
 end

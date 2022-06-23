@@ -18,13 +18,13 @@ figure, plot(t,V*1e3)
 %legend('Rail 1','Rail 2'), ylabel('Volume (L)'), xlabel('Time (s)')
 
 
-DPdt = 5; % How quickly can we switch between rails?
+DPdt = .5; % How quickly can we switch between rails?
 dtscale = DPdt/dt; % Step through DP at a different time step than the one given by Drive Cycle
 DPt = 0:DPdt:t(end);
 
 % Set flow rate and cost to switch
 Qave = max(abs(V(end,:)/t(end)));
-Q = 4e-04;
+Q = 8e-04;
 
 chi = .1;
 K = 1.4; % ratio of specific heats - note that it is capitilized
@@ -61,7 +61,7 @@ end
 for k = 1:length(DPt)-1
     [~,t_ind] = min(abs(t-(t(end)-k*DPdt))); % The time indice for the fine time mesh
     for iii = 1:prod(nn) % Each option in the state space
-        for ii = 1:(size(V,2)+1)^2-size(V,2) % Loop though all the possible decisions at this state and time
+        for ii = 1:((size(V,2)+1)^2-size(V,2)) % Loop though all the possible decisions at this state and time
             [u(ii), V_min_temp(:,ii), V_max_temp(:,ii)] = calculate_cost(J,t_ind,dtscale,V_min,V_max,V_options,indexer,V,Q,DPdt,iii,ii,k,nn,dt,chi,K) ;
         end
         [J(iii,end-k),ind(iii,end-k)] = min(u); % Which choice to make if you find yourself at state iii at time end-k
@@ -87,8 +87,12 @@ abs( total_accum_size_calc1 - min(J(zero_ind,1)) ) / total_accum_size_calc1 < 1e
 
 % Get vector of relevant indices
 decision_ind(1) = ind(zero_ind,1);
+[M,P] = valve_orientation(size(V,2),decision_ind(1)) ;
+next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,size(V,2),zero_ind,nn) ;
 for k = 2:length(DPt)
-    decision_ind(k) = ind(decision_ind(k-1),k-1); % the decision now of where we want to be come next time step
+    [M,P] = valve_orientation(size(V,2),decision_ind(k-1)) ;
+    next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,size(V,2),next_index,nn) ;
+    decision_ind(k) = ind(next_index,k-1); % the decision now of where we want to be come next time step
 end
 figure, plot(DPt,decision_ind)
 
@@ -109,76 +113,13 @@ figure, plot(t,V_MP*1e3)
 
 deltaV = V_MP - V;
 for i = 1:size(V,2)
-    abs( min(deltaV(i,:)) - V_min{i}(zero_ind,1) ) ;
-    abs( max(deltaV(i,:)) - V_max{i}(zero_ind,1) ) ;
-end
-return
-
-
-
-% Find what the volume looks like at each time
-V_p1 = 0;
-V_p2 = 0;
-for jj = 1:length(DPt)-1
-    V_p1(jj+1) = V_p1(jj) + (ind(current_ind(jj),jj)==2|ind(current_ind(jj),jj)==3)*Q*DPdt;
-    V_p2(jj+1) = V_p2(jj) - (ind(current_ind(jj),jj)==1|ind(current_ind(jj),jj)==2)*Q*DPdt;
+    abs( min(deltaV(:,i)) - V_min{i}(zero_ind,1) ) 
+    abs( max(deltaV(:,i)) - V_max{i}(zero_ind,1) ) 
 end
 
+make_plots(t,V,V_MP,chi,K);
+make_table(delV_min,delV_max);
 
-% What is the required accumulator size?
-for i = 1:length(t)
-    [~,DPt_ind] = min(abs( DPt - t(i) + DPdt/2 - t(2)));
-    DelV1(i) =  V_p1(DPt_ind) - V(i,1);
-    DelV2(i)=  V_p2(DPt_ind) - V(i,2);
-end
-%figure, plot(t,DelV1), ylabel('$\Delta V (m^3)$','interpreter','latex'), xlabel('Time (s)','interpreter','latex')
-%figure, plot(t,DelV2), ylabel('$\Delta V (m^3)$','interpreter','latex'), xlabel('Time (s)','interpreter','latex')
-
-
-delV_max1 = max(DelV1) ; [delV_max1, V1_max(end,1)]
-delV_min1 = min(DelV1) ; [delV_min1, V1_min(end,1)]
-delV_max2 = max(DelV2) ; [delV_max2, V2_max(end,1)]
-delV_min2 = min(DelV2) ; [delV_min2, V2_min(end,1)]
-Accumulator_size1_actual = get_accum_size(delV_min1,delV_max1,chi,K);
-Accumulator_size2_actual = get_accum_size(delV_min2,delV_max2,chi,K);
-
-Total_Accum = Accumulator_size1_actual + Accumulator_size2_actual
-
-figure
-plot(t,V*1e3,DPt,V_p1*1e3,DPt,V_p2*1e3), legend('Rail 1 Flow','Rail 2 Flow','Flow delivered to Rail 1 by Pump','Flow delivered to Rail 2 by Pump','Location','NorthWest')
-%title(['Accumulator Sizes = [',num2str(Accumulator_size1_actual*1000),' , ',num2str(Accumulator_size2_actual*1000) , ']',' Liters'])
-ylabel('Volume (L)'), xlabel('Time (s)')
-
-%% Plot Fluid volume in each accum
-Vf1 = DelV1 - delV_min1;
-Vf2 = DelV2 - delV_min2;
-
-figure, plot(t,Vf1*1e3,t,Vf2*1e3), xlabel('Time (s)'), ylabel('Volume (L)')
-
-%% plot Pressure in each accum
-P1_over_Prail = ( (Accumulator_size1_actual+delV_min1) ./ (Accumulator_size1_actual - Vf1) ).^K;
-P2_over_Prail = ( (Accumulator_size2_actual+delV_min2) ./ (Accumulator_size2_actual - Vf2) ).^K;
-
-figure, plot(t,P1_over_Prail-1,t,P2_over_Prail-1), xlabel('Time (s)'), ylabel('$\frac{|P(t) - P_{rail}|}{P_{rail}}$','interpreter','latex','FontSize',22.5), hold on
-plot([0, t(end)],[chi, chi],'k--',[0, t(end)],[-chi, -chi],'--k'), ylim(1.25*[-chi chi]), hold off
-
-ylh = get(gca,'ylabel');
-gyl = get(ylh);                                                         % Object Information
-ylp = get(ylh, 'Position');
-set(ylh, 'Rotation',0, 'Position',ylp, 'VerticalAlignment','middle', 'HorizontalAlignment','center')
-
-
-%% Make table for changing perc_threshold
-thresh_vals = [.05 .1 .2] ;
-k_vals = [1 1.4];
-[a b] = ndgrid(thresh_vals,k_vals);
-a = a(:); b = b(:);
-for i = 1:length(a)
-    chi = a(i);
-    K = b(i);
-    Accumulator_Size(i) = get_accum_size(delV_min1,delV_max1,chi,K);
-end
-[a b Accumulator_Size'*1000]
 
 %% Functions!
 
@@ -190,6 +131,7 @@ end
 
 
 function Vt = get_accum_size(Vmin,Vmax,chi,k)
+%%
     Vmin = min([0,Vmin]);
     Vmax = max([0,Vmax]);
 
@@ -212,6 +154,8 @@ next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,size(V,2),iii,nn) ; % W
 if isempty(next_index)
     J = NaN ; % If next_index is empty, this means that the rail we are going to is outside of the state space
     V_min_temp = NaN; V_max_temp = NaN;
+elseif length(next_index) >1
+    next_index
 else
     V_min_temp = NaN(size(V,2),1); V_max_temp = NaN(size(V,2),1);
     for i = 1:size(V,2)
@@ -220,8 +164,8 @@ else
     end
     for j = 1:dtscale % integrate over the finer time mesh
         for i = 1:size(V,2)
-            V_min_temp(i,1) = min([V_min_temp(i,1) , (V_options{i}(indexer{i}(iii))-V(t_ind+j,i) - Q*dt*(j-1)*(i==M) + Q*dt*(j-1)*(i==P) ) ] ) ;
-            V_max_temp(i,1) = max([V_max_temp(i,1) , (V_options{i}(indexer{i}(iii))-V(end-k+1,i) - Q*dt*(j-1)*(i==M) + Q*dt*(j-1)*(i==P) ) ] ) ;
+            V_min_temp(i,1) = min([V_min_temp(i,1) , (V_options{i}(indexer{i}(iii))-V(t_ind+j,i) - Q*dt*j*(i==M) + Q*dt*j*(i==P) ) ] ) ;
+            V_max_temp(i,1) = max([V_max_temp(i,1) , (V_options{i}(indexer{i}(iii))-V(t_ind+j,i) - Q*dt*j*(i==M) + Q*dt*j*(i==P) ) ] ) ;
         end
     end
     worst_in_section = 0 ;
@@ -235,7 +179,7 @@ end
 
 
 function [M,P] = valve_orientation(n,ii)
-% Called by calculate_cost
+%% Called by calculate_cost
 
 % There are n+1 rails
 % M = 0 means that tank is motoring
@@ -254,7 +198,7 @@ end
 
 
 function [V_min, V_max] = update_V_max_min(V_min_temp,V_max_temp,V_min,V_max,decision,iii,k)
-% Called in the main program - inside the for loop which goes over each time step
+%% Called in the main program - inside the for loop which goes over each time step
 % This code just puts the V_min_temp from the choice we made into the actual V_min thank we will use later
     for i = 1:length(V_min)
         V_min{i}(iii,end-k) = V_min_temp(i,decision);
@@ -266,9 +210,9 @@ end
 
 
 function next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,n,iii,nn)
-% Called by calculate_cost
+%% Called by calculate_cost
 % Given initial index iii, what is the net index if we motor rail M and pump to rail P?
-possible_indeces = zeros(1,prod(nn)) == 0;
+possible_indeces = ones(1,prod(nn));
 for i = 1:n
     temp = V_options{i}(indexer{i}) - (V_options{i}(indexer{i}(iii))- Q*DPdt*(i==M) + Q*DPdt*(i==P)) ; 
     possible_indeces = possible_indeces & abs(temp)<1e-9 ;
@@ -278,7 +222,7 @@ end
 
 
 function display_percent_done(k,kf)
-% Called in the main DP for loop looping over time
+%% Called in the main DP for loop looping over time
 % Display what percent done the for loop is - only at key percentages, like 10 percent
 if kf > 100
     step = 100/(kf-1); % The finest step that is ever made
@@ -296,7 +240,7 @@ end
 
 
 function [V_options, nn] = make_V_options(V,Q,DPdt)
-% Called in main program before main DP loop
+%% Called in main program before main DP loop
 
 % nn is the number of discrete volumes which will be used to make up the
 % state space. This is determined from the maximum and minimum volumes for each rail
@@ -317,7 +261,7 @@ end
 
 
 function indexer = make_indexer(nn,n)
-% Makes indexer for V_options - this indexer creates a mesh grid so that each index results in a unique point in state space
+%% Makes indexer for V_options - this indexer creates a mesh grid so that each index results in a unique point in state space
 lhs = [ '[ temp{1} ' ] ;
 rhs = [ 'ndgrid( 1:nn(1) ' ] ;
 for i = 2:n
@@ -326,4 +270,57 @@ for i = 2:n
 end
 eval( [lhs '] = ' rhs ') ;'] )
 for i = 1:n, indexer{i} = temp{i}(:); end
+end
+
+
+
+function make_table(delV_min,delV_max)
+%% Make table for changing perc_threshold
+thresh_vals = [.05 .1 .2] ;
+k_vals = [1 1.4];
+[a b] = ndgrid(thresh_vals,k_vals);
+a = a(:); b = b(:);
+for i = 1:length(a)
+    chi = a(i);
+    K = b(i);
+    Accumulator_Size(i) = get_accum_size(delV_min,delV_max,chi,K);
+end
+[a b Accumulator_Size'*1000]
+end
+
+
+
+
+function make_plots(t,V,V_MP,chi,K)
+%%
+% make legend for volume plot
+legend_str1 = ['legend( '];
+legend_str2 = [''];
+for i = 1:size(V,2)
+    if i == 1 
+        legend_str1 = [legend_str1 '"Flow required by rail ' num2str(i) '"'] ;
+    else
+        legend_str1 = [legend_str1 ' , "Flow required by rail ' num2str(i) '"'] ;
+    end
+    legend_str2 = [legend_str2 ' , "Flow provided to rail ' num2str(i) '"'] ;
+end
+figure, plot(t,V*1e3,t,V_MP*1e3), ylabel('Volume (L)'), xlabel('Time (s)'), eval([legend_str1 legend_str2 ')' ])
+
+
+% Plot Fluid volume in each accum
+deltaV = V_MP - V ;
+for i = 1:size(V,2)
+    V_f(:,i) = deltaV(:,i) - min(deltaV(:,i)) ;
+end
+
+figure, plot(t,V_f*1e3), xlabel('Time (s)'), ylabel('Volume (L)')
+
+%% plot Pressure in each accum
+for i = 1:size(V,2)
+    delV_min = min(deltaV(:,i));
+    accum_size = get_accum_size(delV_min,max(deltaV(:,i)),chi,K) ;
+    percent_P_error(:,i) = ( (accum_size+delV_min) ./ (accum_size - V_f(:,i)) ).^K - 1;
+end
+figure, plot(t,percent_P_error), xlabel('Time (s)'), ylabel('Percent Error in Pressure'), hold on
+plot([0, t(end)],[chi, chi],'k--',[0, t(end)],[-chi, -chi],'--k'), ylim(1.25*[-chi chi]), hold off
 end
