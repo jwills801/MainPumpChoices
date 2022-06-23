@@ -87,8 +87,12 @@ abs( total_accum_size_calc1 - min(J(zero_ind,1)) ) / total_accum_size_calc1 < 1e
 
 % Get vector of relevant indices
 decision_ind(1) = ind(zero_ind,1);
+[M,P] = valve_orientation(size(V,2),decision_ind(1)) ;
+next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,size(V,2),zero_ind,nn) ;
 for k = 2:length(DPt)
-    decision_ind(k) = ind(decision_ind(k-1),k-1); % the decision now of where we want to be come next time step
+    [M,P] = valve_orientation(size(V,2),decision_ind(k-1)) ;
+    next_index = get_next_index(V_options,indexer,M,P,Q,DPdt,size(V,2),next_index,nn) ;
+    decision_ind(k) = ind(next_index,k-1); % the decision now of where we want to be come next time step
 end
 figure, plot(DPt,decision_ind)
 
@@ -112,6 +116,8 @@ for i = 1:size(V,2)
     abs( min(deltaV(i,:)) - V_min{i}(zero_ind,1) ) ;
     abs( max(deltaV(i,:)) - V_max{i}(zero_ind,1) ) ;
 end
+
+figure, plot(t,V*1e3,t,V_MP*1e3), legend
 return
 
 
