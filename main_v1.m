@@ -6,34 +6,47 @@
 
 clear, close all
 % Load Drive Cycle
-load('JCB5T_C0P_3CPR_Flows.mat')
+% Wheel Loader Drive cycles
+load('JCB5T_C0P_3CPR_Flows.mat') % net zero rail is VERY bumpy
+%load('CNH_WL_LC_CPP_Flows.mat') % These two CNH flows are very similar
+%load('CNH_WL_LC_CPP_Flows.mat')
+
+%JCB big excavator drive cycles
+%load('JCB_bigEX_NinetyDeg_C0P_Flows.mat') % slightly bumpy net zero rail
+%load('JCB_bigEX_Grading_CP0_Flows.mat') % Smooth net zero rail
+%load('JCB_bigEX_trenching_CPP_Flows.mat')
+
 % Posative flow is flow leaving the accumulator
 V1 = cumsum(QR_1)*t(2);
 V2 = cumsum(QR_2)*t(2);
 V3 = cumsum(QR_3)*t(2);
-V = [V1 V3];
+V = [V2 V3];
 %V = [V1 V2 V3];
 figure, plot(t,V*1e3)
-%legend('Rail 1','Rail 2'), ylabel('Volume (L)'), xlabel('Time (s)')
+legend('Rail 1','Rail 2'), ylabel('Volume (L)'), xlabel('Time (s)')
 
 
-DPdt = .2; % How quickly can we switch between rails?
+DPdt = .1; % How quickly can we switch between rails?
 
 % Set flow rate and cost to switch
 Qave = max(abs(V(end,:)/t(end)));
-N = 10;
-Q_vals = linspace(10,20,N)*Qave;
+N = 25;
+Q_vals = linspace(2,15,N)*Qave;
 
 chi = .1;
 K = 1.4; % ratio of specific heats - note that it is capitilized in the functions to not mess with for loop k
 
 %% Loop over various flow rates
 include_graphs = 0;
+constrain_choices = '';
+%constrain_choices = 'PP'; % This forces both rails to be pumped to
 for i = 1:length(Q_vals)
     Q = Q_vals(i);
-    accum_sizes(i,:) = main(t,V,DPdt,Q,chi,K,include_graphs) ;
+    accum_sizes(i,:) = main(t,V,DPdt,Q,chi,K,include_graphs,constrain_choices) ;
     disp([num2str(i) ' of ' num2str(length(Q_vals)) ' flow rates have been tested']) ;
+
 end
+
 
 figure, plot(Q_vals*60e3,sum(accum_sizes,2)*1e3)
 ylabel('\textbf{Sum of accumulator sizes (L)}','interpreter','latex'), xlabel('\textbf{Flow Rate (LPM)}','interpreter','latex')
@@ -48,7 +61,7 @@ save(['Accum_size_norm' num2str(DPdt*1e3) '.mat'],'Q_vals','accum_sizes')
 best_Q = Q_vals(best_flow_rate_ind);
 disp(['Best flow rate is ' num2str(best_Q*60e3,3) ' LPM'])
 include_graphs = 1;
-accum_sizes = main(t,V,DPdt,best_Q,chi,K,include_graphs) ;
+accum_sizes = main(t,V,DPdt,best_Q,chi,K,include_graphs,constrain_choices) ;
 
 
 
@@ -60,11 +73,12 @@ accum_sizes = main(t,V,DPdt,best_Q,chi,K,include_graphs) ;
 
 
 
-function [accum_sizes] = main(t,V,DPdt,Q,chi,K,include_graphs)
+function [accum_sizes] = main(t,V,DPdt,Q,chi,K,include_graphs,constrain_choices)
 
 dt = t(2);
 dtscale = DPdt/dt; % Step through DP at a different time step than the one given by Drive Cycle
 DPt = 0:DPdt:t(end);
+fine_flow_vec = Q*dt*(0:(dtscale-1))';
 
 [V_options, nn] = make_V_options(V,Q,DPdt);
 % nn is the number of discrete volumes which will be used to make up the
@@ -78,7 +92,7 @@ for i = 1:size(V,2), V_min{i} = J; V_max{i} = J;  end
 % make indexers
 indexer = make_indexer(nn,size(V,2));
 
-change_in_ind = make_change_in_index_vector(V_options,indexer,size(V,2),nn,Q,DPdt) ;
+change_in_ind = make_change_in_index_vector(V_options,indexer,size(V,2),nn,Q,DPdt,constrain_choices) ;
 
 
 % V min and max at the end of the time considered
@@ -101,12 +115,12 @@ for k = 1:length(DPt)-1
     [~,t_ind] = min(abs(t-(t(end)-k*DPdt))); % The time indice for the fine time mesh
     for iii = 1:prod(nn) % Each option in the state space
         for ii = 1:((size(V,2)+1)^2-size(V,2)) % Loop though all the possible decisions at this state and time
-            [u(ii), V_min_temp(:,ii), V_max_temp(:,ii)] = calculate_cost(J,t_ind,dtscale,V_min,V_max,V_options,indexer,change_in_ind,V,Q,iii,ii,k,nn,dt,chi,K) ;
+            [u(ii), V_min_temp(:,ii), V_max_temp(:,ii)] = calculate_cost(J,t_ind,dtscale,V_min,V_max,V_options,indexer,change_in_ind,V,iii,ii,k,nn,fine_flow_vec,chi,K) ;
         end
         [J(iii,end-k),ind(iii,end-k)] = min(u); % Which choice to make if you find yourself at state iii at time end-k
         [V_min, V_max] = update_V_max_min(V_min_temp,V_max_temp,V_min,V_max,ind(iii,end-k),iii,k); % using this decison, what are the new V_min and V_max?
     end
-    display_percent_done(k,length(DPt));
+    %display_percent_done(k,length(DPt));
 end
 
 % Get optimal solution back out
@@ -139,7 +153,7 @@ for k = 1:length(DPt)-1
     [M,P] = valve_orientation(size(V,2),decision_ind(k)) ;
     V_MP_temp = NaN(dtscale,size(V,2));
     for i = 1:size(V,2)
-        V_MP_temp(:,i) = V_MP(end,i) + cumsum(Q*dt*ones(dtscale,1))*(P==i) - cumsum(Q*dt*ones(dtscale,1))*(M==i) ;
+        V_MP_temp(:,i) = V_MP(end,i) + Q*dt*(1:dtscale)*(P==i) - Q*dt*(1:dtscale)*(M==i) ;
     end
     V_MP = [V_MP; V_MP_temp];
 end
@@ -192,7 +206,7 @@ end
 
 
 
-function [J, V_min_temp, V_max_temp] = calculate_cost(J,t_ind,dtscale,V_min,V_max,V_options,indexer,change_in_ind,V,Q,iii,ii,k,nn,dt,chi,K)
+function [J, V_min_temp, V_max_temp] = calculate_cost(J,t_ind,dtscale,V_min,V_max,V_options,indexer,change_in_ind,V,iii,ii,k,nn,fine_flow_vec,chi,K)
 %% iii is the index we are currently at
 % We want to calculate the cost of going to another index indicated by configuration ii
 [M,P] = valve_orientation(size(V,2),ii);
@@ -208,11 +222,10 @@ else
         V_min_temp(i,1) = V_min{i}(next_index,end-k+1); % Intiliaize with the Max and min volume differences from the index we going to on the next time step
         V_max_temp(i,1) = V_max{i}(next_index,end-k+1);
     end
-    for j = 1:dtscale % integrate over the finer time mesh
-        for i = 1:size(V,2)
-            V_min_temp(i,1) = min([V_min_temp(i,1) , (V_options{i}(indexer{i}(iii))-V(t_ind+j,i) - Q*dt*j*(i==M) + Q*dt*j*(i==P) ) ] ) ;
-            V_max_temp(i,1) = max([V_max_temp(i,1) , (V_options{i}(indexer{i}(iii))-V(t_ind+j,i) - Q*dt*j*(i==M) + Q*dt*j*(i==P) ) ] ) ;
-        end
+    for i = 1:size(V,2) % integrate over the finer time mesh
+        delV = V_options{i}(indexer{i}(iii)) - fine_flow_vec*(i==M) + fine_flow_vec*(i==P) - V((t_ind):(t_ind+dtscale-1),i) ;
+        V_min_temp(i,1) = min([V_min_temp(i,1); delV]) ;
+        V_max_temp(i,1) = max([V_max_temp(i,1); delV]) ;
     end
     worst_in_section = 0 ;
     for i = 1:size(V,2)
@@ -255,7 +268,7 @@ end
 
 
 
-function [change_in_ind] = make_change_in_index_vector(V_options,indexer,n,nn,Q,DPdt)
+function [change_in_ind] = make_change_in_index_vector(V_options,indexer,n,nn,Q,DPdt,constrain_choices)
 %% calculate how to go from one position in state space to another given which option you are choosing
 ii_vals = 1:(n+1)^2-n ; 
 flag = 0;
@@ -272,6 +285,14 @@ while flag == 0
         next_index = find(possible_indeces) ;
         if ~isempty(next_index)
             change_in_ind(ii) = iii - next_index ;
+            % if we are constraining choices, then adjust this vector so that it points to an infeasible location
+            if ~isempty(constrain_choices)
+                for i = 1:n
+                    if (constrain_choices(i) == 'M' && P == i ) || (constrain_choices(i) == 'P' && M == i )
+                        change_in_ind(ii) = prod(nn+1);
+                    end
+                end
+            end
             ii_vals(ii==ii_vals) =[]; % now remove ii from the list of indices we need to try
         end
     end
@@ -332,8 +353,9 @@ nn_neg = ceil( -ss_bottom/Q/DPdt ) + 2; % The plus two is to give a little room 
 
 % Make V_options - which is a matrix of possible values of V_p at each time
 for i = 1:size(V,2)
-    negative_portion = fliplr(cumsum(-Q*DPdt*ones(1,nn_neg(i)-1)));
-    positive_portion = cumsum(Q*DPdt*ones(1,nn_pos(i)-1));
+    negative_portion = -Q*DPdt*((nn_neg(i)-1):-1:1);
+        
+    positive_portion = Q*DPdt*(1:nn_pos(i)-1);
     V_options{i} = [negative_portion 0 positive_portion];
     nn(1,i) = size(V_options{i},2);
 end
